@@ -1,0 +1,5 @@
+name: astrbot_plugin_command_query
+version: 2.0.0
+author: 珈百璃
+description: 让LLM能够实时查询指令信息，引导用户正确使用 - 支持模糊搜索、详情查询、插件列表
+repo: https://github.com/your-repo/astrbot_plugin_command_query

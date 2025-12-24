@@ -1,0 +1,8 @@
+{
+    "command_prefix": {
+        "description": "指令前缀",
+        "type": "string",
+        "default": "/",
+        "hint": "自定义指令前缀，例如：/ 或 ~ 或 ! 等。输出指令时会使用此前缀替换默认的 /"
+    }
+}
