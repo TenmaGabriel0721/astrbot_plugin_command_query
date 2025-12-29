@@ -1,6 +1,6 @@
-# 指令查询插件 v2.0
+# 指令查询插件 v2.1
 
-> 让 LLM 成为用户的智能指令助手
+> 让 LLM 成为用户的智能指令助手 | 性能优化版
 
 ## 🎯 核心功能
 
@@ -140,6 +140,7 @@ plugin_name: str  # 插件名称（可选，不传返回所有插件列表）
 | `/测试指令搜索 <关键词>` | `/test_search` | 测试搜索功能 |
 | `/测试指令详情 <指令名>` | `/test_detail` | 测试详情查询 |
 | `/测试插件列表 [插件名]` | `/test_plugins` | 测试插件查询 |
+| `/刷新指令缓存` | `/refresh_cache` | 手动刷新缓存 |
 | `/指令查询帮助` | `/query_help` | 显示帮助信息 |
 
 ### 测试示例
@@ -183,10 +184,12 @@ plugin_name: str  # 插件名称（可选，不传返回所有插件列表）
 
 ## 🎨 特性亮点
 
-### 1. 智能缓存
+### 1. 智能缓存 + 自动刷新
 
 - 首次启动时缓存所有指令
 - 后续查询秒级响应
+- **自动检测插件变化，热加载时自动重建缓存**
+- 支持手动刷新缓存命令
 - 减少重复计算
 
 ### 2. 模糊匹配
@@ -213,12 +216,47 @@ plugin_name: str  # 插件名称（可选，不传返回所有插件列表）
 
 ```
 CommandQueryPlugin
-├── _get_all_commands()          # 获取并缓存所有指令
+├── _build_handler_index()       # 构建 Hash Map 索引 (O(M))
+├── _should_refresh_cache()      # 检测插件变化
+├── _get_all_commands()          # 获取并缓存所有指令 (O(N+M))
 ├── _search_similar_commands()   # 模糊搜索算法
 ├── search_command()             # LLM工具：搜索指令
 ├── get_command_detail()         # LLM工具：查询详情
-└── list_plugin_commands()       # LLM工具：列举插件指令
+├── list_plugin_commands()       # LLM工具：列举插件指令
+└── refresh_cache()              # 命令：手动刷新缓存
 ```
+
+### 性能优化
+
+**问题：原版 O(N²) 嵌套循环**
+```python
+# 每个插件都遍历全局注册表
+for star in all_stars:  # N 个插件
+    for handler in star_handlers_registry:  # M 个 handler
+        if handler.module_path == star.module_path:
+            # 处理...
+```
+- 时间复杂度：O(N × M)
+- 36 插件 × 350 handlers = **12,600 次比较**
+
+**优化：Hash Map 索引 + 直接查找**
+```python
+# 一次性构建索引
+handler_index = {module_path: [handlers...]}  # O(M)
+
+# 直接查找
+for star in all_stars:  # O(N)
+    handlers = handler_index[star.module_path]  # O(1)
+    # 处理...
+```
+- 时间复杂度：O(N + M)
+- 36 + 350 = **386 次操作**
+- **性能提升 97%！**
+
+**缓存失效机制**
+- 自动检测插件数量变化
+- 热加载/卸载插件时自动重建缓存
+- 支持手动刷新命令
 
 ### 数据结构
 
@@ -241,6 +279,16 @@ CommandQueryPlugin
 4. LLM 会自动根据用户需求调用相应工具
 
 ## 🆕 版本历史
+
+### v2.1.0 (2024-12-29)
+
+**性能优化 - 向 Linus Torvalds 致敬**
+
+- ⚡ **重大性能优化**：使用 Hash Map 索引，时间复杂度从 O(N²) 降到 O(N+M)
+- 🔄 **智能缓存失效**：自动检测插件变化，热加载时自动重建缓存
+- ✨ 新增 `/刷新指令缓存` 命令 - 支持手动刷新
+- 📊 性能提升 97%（12,600 → 386 次操作）
+- 🔥 解决热加载插件后缓存不更新的问题
 
 ### v2.0.0 (2024-12-23)
 
@@ -269,6 +317,7 @@ MIT License
 
 ---
 
-**作者：** 珈百璃  
-**版本：** 2.0.0  
-**更新日期：** 2024-12-23
+**作者：** 珈百璃
+**版本：** 2.1.0
+**更新日期：** 2024-12-29
+**特别感谢：** Linus Torvalds 的代码评审启发
