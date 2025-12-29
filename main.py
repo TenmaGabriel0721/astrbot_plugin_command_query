@@ -212,23 +212,29 @@ class CommandQueryPlugin(Star):
 
     @filter.llm_tool(name="search_command")
     async def search_command(self, event: AstrMessageEvent, **kwargs) -> str:
-        """🔍 模糊搜索指令 - 当用户输错指令或询问功能时使用
+        """🔍 【优先使用】模糊搜索指令 - 万能查询工具
         
-        ⚠️ 重要使用时机：
-        1. 用户输入了不存在的指令（如 "/钩鱼"、"/抽将"）→ 立即调用此函数纠正
-        2. 用户询问某个功能是否存在（如 "有抽奖吗"、"能不能钓鱼"）→ 调用此函数查找
-        3. 用户描述想要的功能但不知道指令名（如 "我想玩游戏"）→ 调用此函数搜索
-        4. 用户记不清完整指令名（如 "那个钓什么来着"）→ 调用此函数查找
+        ⚠️ 这是最常用的工具！几乎所有指令查询场景都应该用这个！
+        
+        【必须使用的场景】
+        1. 用户输错指令（如 "/钩鱼"、"/抽将"）→ 用这个纠正
+        2. 用户询问功能（如 "有抽奖吗"、"能钓鱼吗"）→ 用这个搜索
+        3. 用户描述需求（如 "我想玩游戏"）→ 用这个查找
+        4. 用户想知道某个插件有什么功能 → 用这个搜索插件名
+        
+        【禁止重复调用】
+        - 调用一次后，已经获得足够信息，不要再调用其他工具！
+        - 搜索结果包含指令名、描述、插件名、别名，信息已经很完整
+        - 如果用户追问"怎么用"，再考虑用 get_command_detail
         
         Args:
-            keyword(string): 搜索关键词，可以是错误的指令名（如 "钩鱼"）、功能描述词（如 "抽奖"、"游戏"）、插件名的一部分（如 "钓鱼"）
+            keyword(string): 搜索关键词（指令名/功能词/插件名的任意部分）
         
         返回:
-            JSON 格式，包含最多 5 条匹配的指令信息
+            JSON格式，包含最多5条匹配的指令（已包含描述和别名）
         
-        使用示例:
-            用户说："/钩鱼" → 调用 search_command(keyword="钩鱼") → 找到 "/钓鱼"
-            用户说："有抽奖功能吗" → 调用 search_command(keyword="抽奖") → 找到相关指令
+        示例:
+            用户："有钓鱼吗" → search_command(keyword="钓鱼") → 直接返回答案，不要再调用其他工具！
         """
         try:
             keyword = kwargs.get('keyword', '')
@@ -280,23 +286,29 @@ class CommandQueryPlugin(Star):
 
     @filter.llm_tool(name="get_command_detail")
     async def get_command_detail(self, event: AstrMessageEvent, **kwargs) -> str:
-        """📖 获取指令详细信息 - 当用户询问"怎么用"时调用
+        """📖 【仅在必要时使用】获取指令详细用法
         
-        ⚠️ 重要使用时机：
-        1. 用户明确询问某个指令的用法（如 "钓鱼指令怎么用"、"/抽奖是干什么的"）→ 立即调用
-        2. 用户提到某个指令但不知道参数（如 "钓鱼指令需要什么参数"）→ 调用此函数
-        3. 用户想了解指令的详细说明（如 "详细说说钓鱼功能"）→ 调用此函数
-        4. 已通过 search_command 找到指令，用户想深入了解 → 继续调用此函数获取详情
+        ⚠️ 慎用！只在用户明确询问"怎么用"时才调用！
+        
+        【何时使用】
+        1. 用户明确问"XX指令怎么用"、"XX怎么操作"
+        2. 用户问"XX需要什么参数"
+        3. 已通过 search_command 找到指令，用户追问具体用法
+        
+        【何时不用】
+        ❌ 用户只是问"有XX功能吗" → 用 search_command 就够了！
+        ❌ 用户问"能不能XX" → 用 search_command 就够了！
+        ❌ 已经调用过 search_command → 不要再调用这个！除非用户追问
+        
+        【避免浪费】
+        - search_command 的结果已经包含描述，通常够用了
+        - 只有用户明确需要详细用法时才调用此工具
         
         Args:
-            command_name(string): 指令名，可以带或不带 / 前缀（会自动补全）
+            command_name(string): 指令名（可带或不带前缀）
         
         返回:
-            JSON 格式，包含指令的完整信息和相关推荐
-        
-        使用示例:
-            用户说："钓鱼指令怎么用" → 调用 get_command_detail(command_name="钓鱼")
-            用户说："/抽奖 是什么" → 调用 get_command_detail(command_name="/抽奖")
+            JSON格式，包含指令详情和相关推荐
         """
         try:
             command_name = kwargs.get('command_name', '')
@@ -362,30 +374,34 @@ class CommandQueryPlugin(Star):
 
     @filter.llm_tool(name="list_plugin_commands")
     async def list_plugin_commands(self, event: AstrMessageEvent, **kwargs) -> str:
-        """📦 列出插件功能 - 查看所有插件或某个插件的指令列表
+        """📦 【特殊场景使用】列出插件清单
         
-        ⚠️ 重要使用时机：
+        ⚠️ 仅在用户明确要"看插件列表"时才用！大多数情况用 search_command 更好！
         
-        【不传 plugin_name 参数 = 列出所有插件】👈 最常用！
-        1. 用户询问"有哪些插件"、"有什么功能"、"能做什么" → 不传参数，列出所有插件
-        2. 用户想浏览系统功能（如 "给我介绍下有啥"）→ 不传参数
-        3. 用户问"一共多少个插件" → 不传参数
+        【何时使用】
+        1. 用户明确问"有哪些插件"、"插件列表"
+        2. 用户问"一共多少个插件"
+        3. 用户要"看看都有什么插件"
         
-        【传入 plugin_name 参数 = 查看某个插件的所有指令】
-        4. 用户询问某个插件有什么功能（如 "钓鱼插件有什么玩法"）→ 传入插件名
-        5. 用户想深入了解某个插件（如 "抽奖插件都有哪些指令"）→ 传入插件名
+        【何时不用】
+        ❌ 用户问"有XX功能吗" → 用 search_command！
+        ❌ 用户问"能不能XX" → 用 search_command！
+        ❌ 用户想知道某个插件的功能 → 用 search_command(keyword="插件名")！
+        
+        【避免浪费】
+        - 如果用户只是想找某个功能，search_command 更合适
+        - 只返回插件名列表，没有指令详情，用处有限
+        - 除非用户明确要看插件清单，否则不要用这个
         
         Args:
-            plugin_name(string): 【可选参数，默认为空】
-                                - 不传或传空字符串 → 返回所有插件名称列表 ⭐ 重点！
-                                - 传入插件名 → 返回该插件的所有指令
+            plugin_name(string): 【可选】不传=列出所有插件名；传入=列出该插件的指令
         
         返回:
-            JSON 格式，根据参数返回不同内容
+            JSON格式的插件列表或插件指令列表
         
-        使用示例:
-            用户说："有哪些插件" → 调用 list_plugin_commands()
-            用户说："钓鱼插件有什么" → 调用 list_plugin_commands(plugin_name="钓鱼")
+        示例:
+            用户："有哪些插件" → list_plugin_commands()
+            但如果用户问："有钓鱼功能吗" → 用 search_command(keyword="钓鱼")！
         """
         try:
             plugin_name = kwargs.get('plugin_name', '')
