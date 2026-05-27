@@ -7,6 +7,7 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 from astrbot.core.star.filter.command import CommandFilter
 from astrbot.core.star.filter.command_group import CommandGroupFilter
+from astrbot.core.star.filter.permission import PermissionTypeFilter, PermissionType
 from astrbot.core.star.star_handler import star_handlers_registry, StarHandlerMetadata
 
 
@@ -158,48 +159,50 @@ class CommandQueryPlugin(Star):
             # 遍历该插件的 handlers
             for handler in handlers:
                 
-                command_name = None
-                aliases = []
+                command_names = []
                 description = handler.desc or "无描述"
-                
+                is_admin = any(
+                    isinstance(filter_, PermissionTypeFilter)
+                    and filter_.permission_type == PermissionType.ADMIN
+                    for filter_ in handler.event_filters
+                )
+
                 # 查找命令过滤器
                 for filter_ in handler.event_filters:
                     if isinstance(filter_, CommandFilter):
-                        command_name = filter_.command_name
-                        # 获取别名
-                        if hasattr(filter_, 'alias') and filter_.alias:
-                            if isinstance(filter_.alias, set):
-                                aliases = list(filter_.alias)
-                            elif isinstance(filter_.alias, list):
-                                aliases = filter_.alias
+                        command_names = filter_.get_complete_command_names()
                         break
                     elif isinstance(filter_, CommandGroupFilter):
-                        command_name = filter_.group_name
+                        command_names = filter_.get_complete_command_names()
                         break
-                
+
                 # 如果找到了命令，添加到字典
-                if command_name:
-                    # 确保命令以 / 开头
-                    if not command_name.startswith("/"):
-                        command_name = "/" + command_name
-                    
+                if command_names:
+                    normalized_names = []
+                    for command_name in command_names:
+                        if not command_name.startswith("/"):
+                            command_name = "/" + command_name
+                        normalized_names.append(command_name)
+
+                    primary_command = normalized_names[0]
+                    aliases = normalized_names[1:]
                     command_info = {
-                        "command": command_name,
+                        "command": primary_command,
                         "description": description,
                         "plugin": plugin_name,
-                        "aliases": aliases
+                        "aliases": aliases,
+                        "is_admin": is_admin
                     }
-                    
-                    commands_dict[command_name] = command_info
-                    
+
+                    commands_dict[primary_command] = command_info
+
                     # 为别名也建立索引
                     for alias in aliases:
-                        if not alias.startswith("/"):
-                            alias = "/" + alias
                         commands_dict[alias] = {
                             **command_info,
                             "command": alias,
-                            "is_alias_of": command_name
+                            "aliases": [],
+                            "is_alias_of": primary_command
                         }
         
         self._command_cache = commands_dict
@@ -315,7 +318,8 @@ class CommandQueryPlugin(Star):
                     "command": self._replace_prefix(result["command"]),
                     "description": result["description"],
                     "plugin": result["plugin"],
-                    "aliases": [self._replace_prefix(alias) for alias in result["aliases"]]
+                    "aliases": [self._replace_prefix(alias) for alias in result["aliases"]],
+                    "is_admin": result.get("is_admin", False)
                 }
                 if "is_alias_of" in result:
                     clean_result["is_alias_of"] = self._replace_prefix(result["is_alias_of"])
@@ -407,6 +411,7 @@ class CommandQueryPlugin(Star):
                 "description": cmd_info["description"],
                 "plugin": cmd_info["plugin"],
                 "aliases": [self._replace_prefix(alias) for alias in cmd_info["aliases"]],
+                "is_admin": cmd_info.get("is_admin", False),
                 "similar_commands": [self._replace_prefix(cmd) for cmd in similar_commands]
             }
             
@@ -504,7 +509,8 @@ class CommandQueryPlugin(Star):
                     {
                         "command": self._replace_prefix(cmd["command"]),
                         "description": cmd["description"],
-                        "aliases": [self._replace_prefix(alias) for alias in cmd["aliases"]]
+                        "aliases": [self._replace_prefix(alias) for alias in cmd["aliases"]],
+                        "is_admin": cmd.get("is_admin", False)
                     }
                     for cmd in commands
                 ]
@@ -531,7 +537,7 @@ class CommandQueryPlugin(Star):
             return
         
         logger.info(f"测试搜索指令: {message}")
-        result_str = await self.search_command(event, message)
+        result_str = await self.search_command(event, keyword=message)
         
         try:
             result_data = json.loads(result_str)
@@ -550,6 +556,8 @@ class CommandQueryPlugin(Star):
                 result_text += f"{i}. {cmd['command']}\n"
                 result_text += f"   📦 插件: {cmd['plugin']}\n"
                 result_text += f"   📝 描述: {cmd['description']}\n"
+                if cmd.get('is_admin'):
+                    result_text += f"   🔒 管理员指令\n"
                 if cmd.get('aliases'):
                     result_text += f"   🔗 别名: {', '.join(cmd['aliases'])}\n"
                 if cmd.get('is_alias_of'):
@@ -571,7 +579,7 @@ class CommandQueryPlugin(Star):
             return
         
         logger.info(f"测试查询指令详情: {message}")
-        result_str = await self.get_command_detail(event, message)
+        result_str = await self.get_command_detail(event, command_name=message)
         
         try:
             result_data = json.loads(result_str)
@@ -592,6 +600,9 @@ class CommandQueryPlugin(Star):
             result_text += f"📦 插件: {result_data['plugin']}\n"
             result_text += f"📝 描述: {result_data['description']}\n"
             
+            if result_data.get('is_admin'):
+                result_text += f"🔒 类型: 管理员指令\n"
+
             if result_data.get('aliases'):
                 result_text += f"🔗 别名: {', '.join(result_data['aliases'])}\n"
             
@@ -614,7 +625,7 @@ class CommandQueryPlugin(Star):
         message = event.message_str.replace("/测试插件列表", "").replace("/test_plugins", "").strip()
         
         logger.info(f"测试查询插件: {message or '所有插件'}")
-        result_str = await self.list_plugin_commands(event, message)
+        result_str = await self.list_plugin_commands(event, plugin_name=message)
         
         try:
             result_data = json.loads(result_str)
@@ -656,6 +667,8 @@ class CommandQueryPlugin(Star):
             for cmd in commands:
                 result_text += f"• {cmd['command']}\n"
                 result_text += f"  {cmd['description']}\n"
+                if cmd.get('is_admin'):
+                    result_text += f"  类型: 管理员指令\n"
                 if cmd.get('aliases'):
                     result_text += f"  别名: {', '.join(cmd['aliases'])}\n"
                 result_text += "\n"
