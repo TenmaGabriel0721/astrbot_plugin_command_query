@@ -11,13 +11,13 @@ from astrbot.core.star import command_management
 
 @register(
     "astrbot_plugin_command_query",
-    "珈百璃",
+    "TenmaGabriel0721",
     "让LLM能够实时查询指令信息，引导用户正确使用",
-    "2.1.1",
+    "2.1.2",
 )
 class CommandQueryPlugin(Star):
     """
-    AstrBot 指令查询插件 v2.1.1
+    AstrBot 指令查询插件 v2.1.2
 
     【核心功能】
     为 LLM 提供指令查询能力，让 LLM 能够：
@@ -42,9 +42,7 @@ class CommandQueryPlugin(Star):
         self.config = config
         # 获取用户配置的指令前缀，默认为 /
         self.command_prefix = config.get("command_prefix", "/") if config else "/"
-        logger.info(
-            f"指令查询插件已加载 v2.1.1 (指令前缀: {self.command_prefix})"
-        )
+        logger.info(f"指令查询插件已加载 v2.1.2 (指令前缀: {self.command_prefix})")
 
     def _replace_prefix(self, command: str) -> str:
         """
@@ -70,6 +68,44 @@ class CommandQueryPlugin(Star):
         if not command.startswith("/"):
             command = "/" + command
         return command
+
+    def _unwrap_message_event(
+        self,
+        event_or_context: Any,
+    ) -> AstrMessageEvent | None:
+        """Extract the real message event from LLM tool context wrappers.
+
+        Args:
+            event_or_context: A direct message event or a nested tool context.
+
+        Returns:
+            The message event containing a unified message origin, or None when
+            no valid event can be found.
+        """
+        candidates = [event_or_context]
+        seen = set()
+
+        while candidates:
+            candidate = candidates.pop(0)
+            if candidate is None:
+                continue
+
+            marker = id(candidate)
+            if marker in seen:
+                continue
+            seen.add(marker)
+
+            if getattr(candidate, "unified_msg_origin", None):
+                return candidate
+
+            inner_context = getattr(candidate, "context", None)
+            if inner_context is not None:
+                candidates.append(getattr(inner_context, "event", None))
+                candidates.append(inner_context)
+
+            candidates.append(getattr(candidate, "event", None))
+
+        return None
 
     def _compose_alias(self, parent_signature: str, alias: str) -> str:
         alias = " ".join((alias or "").strip().split())
@@ -100,7 +136,7 @@ class CommandQueryPlugin(Star):
 
     async def _get_all_commands(
         self,
-        event: AstrMessageEvent,
+        event: Any,
     ) -> dict[str, dict]:
         """获取当前事件可用的指令信息。
 
@@ -108,7 +144,7 @@ class CommandQueryPlugin(Star):
         禁用、别名和权限配置都会被应用。别名只作为主命令的匹配字段，不作为独立结果返回。
 
         Args:
-            event: 当前消息事件，用于按会话读取对应配置的插件选择范围。
+            event: 当前消息事件或工具上下文，用于按会话读取对应配置的插件选择范围。
 
         Returns:
             以标准化命令名为键的可用指令信息。
@@ -122,12 +158,18 @@ class CommandQueryPlugin(Star):
             return {}
 
         active_module_paths = self._get_active_module_paths()
+        message_event = self._unwrap_message_event(event)
+        if message_event is None:
+            error = "无法从工具上下文提取当前消息事件"
+            logger.error(error)
+            raise ValueError(error)
+
         try:
-            current_config = self.context.get_config(event.unified_msg_origin)
+            current_config = self.context.get_config(message_event.unified_msg_origin)
             plugin_set = current_config.get("plugin_set", ["*"])
         except Exception as e:
             logger.error(f"获取当前会话配置失败: {e}")
-            return {}
+            raise
 
         selected_plugins = (
             None
@@ -588,7 +630,7 @@ class CommandQueryPlugin(Star):
         self, event: AstrMessageEvent
     ) -> AsyncGenerator[MessageEventResult, None]:
         """显示插件帮助信息"""
-        help_text = """=== 指令查询插件 v2.1.1 ===
+        help_text = """=== 指令查询插件 v2.1.2 ===
 👩‍💻 by 珈百璃
 
 【核心功能】
